@@ -1,5 +1,5 @@
 services:
-  # ── API Server (includes embedded worker for free-tier hosting) ───────────
+  # ── API Server (embedded worker + SQLite) — FREE ──────────────────────────
   - type: web
     name: dispatch-api
     runtime: python
@@ -8,9 +8,7 @@ services:
     startCommand: uvicorn main:app --host 0.0.0.0 --port $PORT
     envVars:
       - key: DATABASE_URL
-        fromDatabase:
-          name: dispatch-db
-          property: connectionString
+        value: sqlite+aiosqlite:///./dispatch.db
       - key: REDIS_URL
         fromService:
           name: dispatch-redis
@@ -19,21 +17,16 @@ services:
       - key: PYTHON_VERSION
         value: "3.12.0"
 
-  # ── Dashboard (static site — free) ───────────────────────────────────────
+  # ── Dashboard (static site) — FREE ───────────────────────────────────────
   - type: web
     name: dispatch-dashboard
     runtime: static
     staticPublishPath: frontend
     buildCommand: echo "no build needed"
 
-  # ── Redis (free) ──────────────────────────────────────────────────────────
+  # ── Redis — FREE ──────────────────────────────────────────────────────────
   - type: redis
     name: dispatch-redis
     plan: free
     maxmemoryPolicy: allkeys-lru
     ipAllowList: []
-
-databases:
-  # ── PostgreSQL (free) ─────────────────────────────────────────────────────
-  - name: dispatch-db
-    plan: free
