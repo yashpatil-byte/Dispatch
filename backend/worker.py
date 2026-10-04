@@ -27,7 +27,8 @@ from queue import JobQueue
 logging.basicConfig(level=logging.INFO, format="%(asctime)s [worker] %(levelname)s %(message)s")
 log = logging.getLogger(__name__)
 
-DATABASE_URL = os.getenv("DATABASE_URL", "postgresql+asyncpg://dispatch:dispatch@db:5432/dispatch")
+_raw_db_url  = os.getenv("DATABASE_URL", "postgresql+asyncpg://dispatch:dispatch@db:5432/dispatch")
+DATABASE_URL = _raw_db_url.replace("postgres://", "postgresql+asyncpg://", 1)
 REDIS_URL    = os.getenv("REDIS_URL", "redis://redis:6379")
 API_URL      = os.getenv("API_URL", "http://api:8000")
 QUEUE        = os.getenv("WORKER_QUEUE", "default")

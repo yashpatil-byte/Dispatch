@@ -19,7 +19,9 @@ from queue import JobQueue
 from ws_manager import manager
 
 # ── Config ──────────────────────────────────────────────────────────────────
-DATABASE_URL = os.getenv("DATABASE_URL", "postgresql+asyncpg://dispatch:dispatch@db:5432/dispatch")
+# Render provides postgres:// — asyncpg needs postgresql+asyncpg://
+_raw_db_url  = os.getenv("DATABASE_URL", "postgresql+asyncpg://dispatch:dispatch@db:5432/dispatch")
+DATABASE_URL = _raw_db_url.replace("postgres://", "postgresql+asyncpg://", 1)
 REDIS_URL    = os.getenv("REDIS_URL", "redis://redis:6379")
 
 engine       = create_async_engine(DATABASE_URL, echo=False)
