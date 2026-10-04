@@ -42,6 +42,7 @@ async def startup():
     redis_client = aioredis.from_url(REDIS_URL, decode_responses=True)
     job_queue    = JobQueue(redis_client)
     asyncio.create_task(metrics_broadcast_loop())
+    asyncio.create_task(embedded_worker_loop())
 
 @app.on_event("shutdown")
 async def shutdown():
@@ -258,3 +259,87 @@ async def metrics_broadcast_loop():
             except Exception:
                 pass
             await asyncio.sleep(2)
+
+async def embedded_worker_loop():
+    """
+    Embedded worker that runs inside the API process (for free-tier hosting).
+    Polls the queue and executes jobs with a small thread pool.
+    For production scale, run worker.py as a separate process.
+    """
+    import importlib, sys
+    # Dynamically import handlers from worker module
+    try:
+        worker_mod = importlib.import_module("worker")
+        handlers = worker_mod._handlers
+    except Exception:
+        handlers = {}
+
+    import uuid, asyncio as _asyncio
+    worker_id = f"embedded-{uuid.uuid4().hex[:6]}"
+
+    # Register this embedded worker in DB
+    async with SessionLocal() as db:
+        from models import Worker as WorkerModel
+        from sqlalchemy import select
+        existing = await db.execute(select(WorkerModel).where(WorkerModel.id == worker_id))
+        if not existing.scalar_one_or_none():
+            db.add(WorkerModel(id=worker_id, queue="default", status="idle"))
+            await db.commit()
+
+    sem = _asyncio.Semaphore(4)
+
+    async def run_job(job_id: str):
+        async with sem:
+            now = __import__("datetime").datetime.now(__import__("datetime").timezone.utc)
+            async with SessionLocal() as db:
+                from sqlalchemy import update as _update
+                job = await db.get(Job, job_id)
+                if not job or job.status != "pending":
+                    return
+                await db.execute(_update(Job).where(Job.id == job_id).values(
+                    status="running", started_at=now,
+                    worker_id=worker_id, attempts=Job.attempts + 1
+                ))
+                await db.commit()
+                await db.refresh(job)
+                await manager.broadcast("job_started", _job_dict(job))
+
+            handler = handlers.get(job.name)
+            try:
+                if handler is None:
+                    raise ValueError(f"No handler for '{job.name}'")
+                result = await _asyncio.wait_for(handler(job.payload), timeout=300)
+                fin = __import__("datetime").datetime.now(__import__("datetime").timezone.utc)
+                async with SessionLocal() as db:
+                    from sqlalchemy import update as _update
+                    await db.execute(_update(Job).where(Job.id == job_id).values(
+                        status="done", finished_at=fin, result=result
+                    ))
+                    await db.commit()
+                    j = await db.get(Job, job_id)
+                    await manager.broadcast("job_done", _job_dict(j))
+            except Exception as exc:
+                fin = __import__("datetime").datetime.now(__import__("datetime").timezone.utc)
+                attempt = job.attempts
+                requeue = attempt < job.max_retries
+                new_status = "pending" if requeue else "dead"
+                async with SessionLocal() as db:
+                    from sqlalchemy import update as _update
+                    await db.execute(_update(Job).where(Job.id == job_id).values(
+                        status=new_status, finished_at=fin, error=str(exc)
+                    ))
+                    await db.commit()
+                    if requeue:
+                        await job_queue.enqueue(job_id, job.queue, job.priority)
+                    j = await db.get(Job, job_id)
+                    await manager.broadcast("job_failed", _job_dict(j))
+
+    while True:
+        try:
+            job_id = await job_queue.dequeue("default", worker_id)
+            if job_id:
+                _asyncio.create_task(run_job(job_id))
+            else:
+                await _asyncio.sleep(0.5)
+        except Exception:
+            await _asyncio.sleep(1)

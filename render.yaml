@@ -1,5 +1,5 @@
 services:
-  # ── API Server ────────────────────────────────────────────────────────────
+  # ── API Server (includes embedded worker for free-tier hosting) ───────────
   - type: web
     name: dispatch-api
     runtime: python
@@ -19,41 +19,14 @@ services:
       - key: PYTHON_VERSION
         value: "3.12.0"
 
-  # ── Worker ────────────────────────────────────────────────────────────────
-  - type: worker
-    name: dispatch-worker
-    runtime: python
-    rootDir: backend
-    buildCommand: pip install -r requirements.txt
-    startCommand: python worker.py
-    envVars:
-      - key: DATABASE_URL
-        fromDatabase:
-          name: dispatch-db
-          property: connectionString
-      - key: REDIS_URL
-        fromService:
-          name: dispatch-redis
-          type: redis
-          property: connectionString
-      - key: API_URL
-        fromService:
-          name: dispatch-api
-          type: web
-          property: host
-      - key: CONCURRENCY
-        value: "2"
-      - key: PYTHON_VERSION
-        value: "3.12.0"
-
-  # ── Dashboard (static site) ───────────────────────────────────────────────
+  # ── Dashboard (static site — free) ───────────────────────────────────────
   - type: web
     name: dispatch-dashboard
     runtime: static
     staticPublishPath: frontend
     buildCommand: echo "no build needed"
 
-  # ── Redis ─────────────────────────────────────────────────────────────────
+  # ── Redis (free) ──────────────────────────────────────────────────────────
   - type: redis
     name: dispatch-redis
     plan: free
@@ -61,6 +34,6 @@ services:
     ipAllowList: []
 
 databases:
-  # ── PostgreSQL ────────────────────────────────────────────────────────────
+  # ── PostgreSQL (free) ─────────────────────────────────────────────────────
   - name: dispatch-db
     plan: free
