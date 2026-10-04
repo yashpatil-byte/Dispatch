@@ -1,0 +1,66 @@
+version: "3.9"
+
+services:
+  db:
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_USER:     dispatch
+      POSTGRES_PASSWORD: dispatch
+      POSTGRES_DB:       dispatch
+    volumes:
+      - pg_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD", "pg_isready", "-U", "dispatch"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+
+  redis:
+    image: redis:7-alpine
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+
+  api:
+    build: ./backend
+    command: uvicorn main:app --host 0.0.0.0 --port 8000 --reload
+    ports:
+      - "8000:8000"
+    environment:
+      DATABASE_URL: postgresql+asyncpg://dispatch:dispatch@db:5432/dispatch
+      REDIS_URL:    redis://redis:6379
+    depends_on:
+      db:    { condition: service_healthy }
+      redis: { condition: service_healthy }
+    volumes:
+      - ./backend:/app
+    working_dir: /app
+
+  worker:
+    build: ./backend
+    command: python worker.py
+    environment:
+      DATABASE_URL:   postgresql+asyncpg://dispatch:dispatch@db:5432/dispatch
+      REDIS_URL:      redis://redis:6379
+      API_URL:        http://api:8000
+      WORKER_QUEUE:   default
+      CONCURRENCY:    4
+    depends_on:
+      - api
+    deploy:
+      replicas: 2          # spin up 2 workers by default
+    volumes:
+      - ./backend:/app
+    working_dir: /app
+
+  dashboard:
+    image: nginx:alpine
+    ports:
+      - "3000:80"
+    volumes:
+      - ./frontend:/usr/share/nginx/html:ro
+
+volumes:
+  pg_data:

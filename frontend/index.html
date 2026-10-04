@@ -1,0 +1,291 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Dispatch — Job Orchestration Dashboard</title>
+  <style>
+    *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+    :root {
+      --bg:       #0f1117;
+      --surface:  #1a1d27;
+      --border:   #2a2d3e;
+      --text:     #e2e8f0;
+      --muted:    #64748b;
+      --accent:   #6366f1;
+      --green:    #22c55e;
+      --yellow:   #eab308;
+      --red:      #ef4444;
+      --blue:     #3b82f6;
+    }
+    body { background: var(--bg); color: var(--text); font-family: system-ui, -apple-system, sans-serif; font-size: 14px; }
+
+    /* ── Layout ── */
+    .shell   { display: grid; grid-template-rows: 56px 1fr; height: 100vh; }
+    .topbar  { display: flex; align-items: center; padding: 0 24px; border-bottom: 1px solid var(--border); gap: 16px; }
+    .topbar h1 { font-size: 16px; font-weight: 700; letter-spacing: -.02em; color: var(--text); }
+    .badge   { font-size: 11px; padding: 2px 8px; border-radius: 99px; background: var(--accent); color: #fff; font-weight: 600; }
+    .ws-dot  { width: 8px; height: 8px; border-radius: 50%; background: var(--muted); margin-left: auto; transition: background .3s; }
+    .ws-dot.connected { background: var(--green); }
+
+    .main    { display: grid; grid-template-columns: 260px 1fr; overflow: hidden; }
+    .sidebar { border-right: 1px solid var(--border); padding: 20px; overflow-y: auto; display: flex; flex-direction: column; gap: 24px; }
+    .content { padding: 24px; overflow-y: auto; display: flex; flex-direction: column; gap: 20px; }
+
+    /* ── Stat cards ── */
+    .stats   { display: grid; grid-template-columns: repeat(4, 1fr); gap: 12px; }
+    .stat    { background: var(--surface); border: 1px solid var(--border); border-radius: 10px; padding: 16px; }
+    .stat .label { font-size: 11px; text-transform: uppercase; letter-spacing: .07em; color: var(--muted); margin-bottom: 6px; }
+    .stat .value { font-size: 28px; font-weight: 700; line-height: 1; }
+    .stat.pending .value { color: var(--blue);   }
+    .stat.running .value { color: var(--accent); }
+    .stat.done    .value { color: var(--green);  }
+    .stat.failed  .value { color: var(--red);    }
+
+    /* ── Submit form ── */
+    .section-title { font-size: 12px; text-transform: uppercase; letter-spacing: .07em; color: var(--muted); margin-bottom: 10px; font-weight: 600; }
+    .form    { display: flex; flex-direction: column; gap: 10px; }
+    .form input, .form select, .form textarea {
+      background: var(--bg); border: 1px solid var(--border); border-radius: 8px;
+      color: var(--text); padding: 8px 10px; font-size: 13px; width: 100%;
+      outline: none; transition: border-color .2s;
+    }
+    .form input:focus, .form select:focus, .form textarea:focus { border-color: var(--accent); }
+    .form textarea { resize: vertical; min-height: 72px; font-family: monospace; font-size: 12px; }
+    .btn  { background: var(--accent); color: #fff; border: none; border-radius: 8px; padding: 9px 14px;
+            font-size: 13px; font-weight: 600; cursor: pointer; width: 100%; transition: opacity .2s; }
+    .btn:hover { opacity: .85; }
+    .btn:disabled { opacity: .5; cursor: not-allowed; }
+
+    /* ── Workers ── */
+    .worker-list { display: flex; flex-direction: column; gap: 8px; }
+    .worker-card { background: var(--bg); border: 1px solid var(--border); border-radius: 8px; padding: 10px 12px; }
+    .worker-card .wid { font-size: 12px; font-family: monospace; color: var(--muted); }
+    .worker-card .wstats { display: flex; gap: 12px; margin-top: 4px; font-size: 12px; color: var(--muted); }
+
+    /* ── Job table ── */
+    .table-wrap { background: var(--surface); border: 1px solid var(--border); border-radius: 10px; overflow: hidden; }
+    table { width: 100%; border-collapse: collapse; }
+    thead th { background: var(--bg); padding: 10px 14px; text-align: left; font-size: 11px; text-transform: uppercase;
+               letter-spacing: .07em; color: var(--muted); border-bottom: 1px solid var(--border); }
+    tbody td { padding: 10px 14px; border-bottom: 1px solid var(--border); font-size: 13px; vertical-align: middle; }
+    tbody tr:last-child td { border-bottom: none; }
+    tbody tr:hover { background: rgba(255,255,255,.02); }
+
+    /* Status pills */
+    .pill { display: inline-flex; align-items: center; gap: 5px; padding: 2px 9px; border-radius: 99px; font-size: 11px; font-weight: 600; }
+    .pill::before { content: ''; width: 6px; height: 6px; border-radius: 50%; flex-shrink: 0; }
+    .pill.pending  { background: rgba(59,130,246,.15); color: var(--blue);   }
+    .pill.pending::before  { background: var(--blue);   }
+    .pill.running  { background: rgba(99,102,241,.15);  color: var(--accent); }
+    .pill.running::before  { background: var(--accent); animation: pulse 1s infinite; }
+    .pill.done     { background: rgba(34,197,94,.15);   color: var(--green);  }
+    .pill.done::before     { background: var(--green);  }
+    .pill.failed   { background: rgba(239,68,68,.15);   color: var(--red);    }
+    .pill.failed::before   { background: var(--red);    }
+    .pill.dead     { background: rgba(100,116,139,.15); color: var(--muted);  }
+    .pill.dead::before     { background: var(--muted);  }
+
+    @keyframes pulse { 0%,100% { opacity: 1; } 50% { opacity: .4; } }
+
+    .empty { text-align: center; color: var(--muted); padding: 40px; }
+    .tag { font-size: 11px; font-family: monospace; background: rgba(255,255,255,.05); padding: 1px 6px; border-radius: 4px; color: var(--muted); }
+  </style>
+</head>
+<body>
+<div class="shell">
+  <header class="topbar">
+    <h1>Dispatch</h1>
+    <span class="badge">v1.0</span>
+    <div id="ws-dot" class="ws-dot" title="WebSocket"></div>
+  </header>
+
+  <div class="main">
+    <!-- Sidebar -->
+    <aside class="sidebar">
+      <!-- Stats -->
+      <div>
+        <div class="section-title">Overview</div>
+        <div class="stats" style="grid-template-columns: 1fr 1fr; gap: 8px;">
+          <div class="stat pending"><div class="label">Pending</div><div class="value" id="s-pending">–</div></div>
+          <div class="stat running"><div class="label">Running</div><div class="value" id="s-running">–</div></div>
+          <div class="stat done">   <div class="label">Done</div>   <div class="value" id="s-done">–</div></div>
+          <div class="stat failed"> <div class="label">Failed</div> <div class="value" id="s-failed">–</div></div>
+        </div>
+        <div style="margin-top: 10px; color: var(--muted); font-size: 12px;">
+          Avg duration: <span id="s-avg" style="color: var(--text); font-weight: 600;">–</span>
+        </div>
+      </div>
+
+      <!-- Submit job -->
+      <div>
+        <div class="section-title">Submit Job</div>
+        <form class="form" id="job-form" onsubmit="submitJob(event)">
+          <select id="f-name">
+            <option value="send_email">send_email</option>
+            <option value="resize_image">resize_image</option>
+            <option value="generate_report">generate_report</option>
+            <option value="noop">noop</option>
+          </select>
+          <select id="f-queue">
+            <option value="default">default</option>
+            <option value="critical">critical</option>
+            <option value="batch">batch</option>
+          </select>
+          <div style="display: flex; gap: 8px; align-items: center;">
+            <label style="color: var(--muted); font-size: 12px; white-space: nowrap;">Priority</label>
+            <input type="range" id="f-priority" min="1" max="10" value="5" style="flex: 1; background: transparent; border: none; padding: 0;" oninput="document.getElementById('f-pval').textContent = this.value">
+            <span id="f-pval" style="font-size: 12px; color: var(--accent); width: 16px; text-align: right;">5</span>
+          </div>
+          <textarea id="f-payload" placeholder='{"to":"user@example.com"}'>{}</textarea>
+          <button class="btn" type="submit" id="submit-btn">Enqueue Job</button>
+        </form>
+      </div>
+
+      <!-- Workers -->
+      <div>
+        <div class="section-title">Workers</div>
+        <div class="worker-list" id="workers-list">
+          <div style="color: var(--muted); font-size: 12px;">No workers yet</div>
+        </div>
+      </div>
+    </aside>
+
+    <!-- Main content -->
+    <main class="content">
+      <!-- Throughput bar (simple) -->
+      <div>
+        <div class="section-title">Queue Depth</div>
+        <div style="background: var(--surface); border: 1px solid var(--border); border-radius: 10px; padding: 14px 18px; display: flex; align-items: center; gap: 16px;">
+          <span style="color: var(--muted); font-size: 12px;">default</span>
+          <div style="flex: 1; background: var(--border); border-radius: 4px; height: 6px; overflow: hidden;">
+            <div id="q-bar" style="height: 100%; background: var(--accent); border-radius: 4px; width: 0%; transition: width .5s;"></div>
+          </div>
+          <span id="q-depth" style="font-size: 13px; font-weight: 600; min-width: 32px; text-align: right;">0</span>
+        </div>
+      </div>
+
+      <!-- Job feed -->
+      <div>
+        <div style="display: flex; align-items: center; justify-content: space-between; margin-bottom: 10px;">
+          <div class="section-title" style="margin: 0;">Live Job Feed</div>
+          <button class="btn" style="width: auto; padding: 5px 14px; font-size: 12px;" onclick="loadJobs()">Refresh</button>
+        </div>
+        <div class="table-wrap">
+          <table>
+            <thead>
+              <tr>
+                <th>ID</th><th>Name</th><th>Queue</th><th>Status</th>
+                <th>Priority</th><th>Attempts</th><th>Duration</th><th>Worker</th>
+              </tr>
+            </thead>
+            <tbody id="jobs-tbody">
+              <tr><td colspan="8" class="empty">Loading…</td></tr>
+            </tbody>
+          </table>
+        </div>
+      </div>
+    </main>
+  </div>
+</div>
+
+<script>
+const API = "http://localhost:8000";
+const WS  = "ws://localhost:8000/ws";
+
+let ws, wsRetries = 0;
+
+function connectWS() {
+  ws = new WebSocket(WS);
+  ws.onopen  = () => { document.getElementById("ws-dot").classList.add("connected"); wsRetries = 0; };
+  ws.onclose = () => {
+    document.getElementById("ws-dot").classList.remove("connected");
+    setTimeout(connectWS, Math.min(500 * 2 ** wsRetries++, 10000));
+  };
+  ws.onmessage = ({ data }) => {
+    const { event, data: d } = JSON.parse(data);
+    if (event === "metrics" || event === "init") updateMetrics(d);
+    if (["job_created","job_started","job_done","job_failed","job_cancelled"].includes(event)) loadJobs();
+  };
+}
+
+function updateMetrics(d) {
+  document.getElementById("s-pending").textContent = d.pending ?? "–";
+  document.getElementById("s-running").textContent = d.running ?? "–";
+  document.getElementById("s-done").textContent    = d.done    ?? "–";
+  document.getElementById("s-failed").textContent  = d.failed  ?? "–";
+  document.getElementById("s-avg").textContent     = d.avg_duration_s != null ? d.avg_duration_s.toFixed(2) + "s" : "–";
+  const depth = d.queue_depth ?? 0;
+  document.getElementById("q-depth").textContent = depth;
+  document.getElementById("q-bar").style.width = Math.min(depth / 20 * 100, 100) + "%";
+}
+
+async function loadJobs() {
+  const res  = await fetch(`${API}/jobs?limit=50`);
+  const jobs = await res.json();
+  const tbody = document.getElementById("jobs-tbody");
+  if (!jobs.length) { tbody.innerHTML = '<tr><td colspan="8" class="empty">No jobs yet</td></tr>'; return; }
+  tbody.innerHTML = jobs.map(j => {
+    const dur = (j.started_at && j.finished_at)
+      ? ((new Date(j.finished_at) - new Date(j.started_at)) / 1000).toFixed(2) + "s"
+      : j.status === "running" ? "…" : "–";
+    return `<tr>
+      <td><span class="tag">${j.id.slice(0,8)}</span></td>
+      <td>${j.name}</td>
+      <td><span class="tag">${j.queue}</span></td>
+      <td><span class="pill ${j.status}">${j.status}</span></td>
+      <td>${j.priority}</td>
+      <td>${j.attempts}</td>
+      <td>${dur}</td>
+      <td><span class="tag">${j.worker_id ? j.worker_id.slice(0,12) : "–"}</span></td>
+    </tr>`;
+  }).join("");
+}
+
+async function loadWorkers() {
+  const res = await fetch(`${API}/workers`);
+  const workers = await res.json();
+  const el = document.getElementById("workers-list");
+  if (!workers.length) { el.innerHTML = '<div style="color: var(--muted); font-size: 12px;">No workers online</div>'; return; }
+  el.innerHTML = workers.map(w => `
+    <div class="worker-card">
+      <div class="wid">${w.id}</div>
+      <div class="wstats">
+        <span>✓ ${w.jobs_done}</span>
+        <span style="color: var(--red)">✗ ${w.jobs_failed}</span>
+        <span class="pill ${w.status}" style="margin-left: auto;">${w.status}</span>
+      </div>
+    </div>`).join("");
+}
+
+async function submitJob(e) {
+  e.preventDefault();
+  const btn = document.getElementById("submit-btn");
+  btn.disabled = true;
+  try {
+    const payload = JSON.parse(document.getElementById("f-payload").value || "{}");
+    await fetch(`${API}/jobs`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        name:     document.getElementById("f-name").value,
+        queue:    document.getElementById("f-queue").value,
+        priority: parseInt(document.getElementById("f-priority").value),
+        payload,
+      }),
+    });
+  } catch (err) {
+    alert("Error: " + err.message);
+  } finally {
+    btn.disabled = false;
+  }
+}
+
+// Init
+connectWS();
+loadJobs();
+loadWorkers();
+setInterval(loadWorkers, 5000);
+</script>
+</body>
+</html>
